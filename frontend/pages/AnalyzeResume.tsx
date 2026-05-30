@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { PageId, AnalysisResult } from '../types';
-import { simulateAnalysis } from '../data';
+import { analyzeResume, mapAnalyzeResponseToResult } from '../lib/api';
 import {
   UploadCloud,
   FileText,
@@ -31,10 +31,8 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
   const [roleCategory, setRoleCategory] = useState('UI/UX Design');
 
   // File Upload State
-  const [file, setFile] = useState<{ name: string; size: string } | null>({
-    name: 'Har_Arkhel_Resume.pdf',
-    size: '142 KB'
-  });
+  const [file, setFile] = useState<{ name: string; size: string } | null>(null);
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +51,7 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
   // Loading Screen State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [analyzeError, setAnalyzeError] = useState('');
 
   const steps = [
     'Extracting resume text layout...',
@@ -92,9 +91,10 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
       const sizeKb = Math.round(droppedFile.size / 1024);
+      setResumeFile(droppedFile);
       setFile({
         name: droppedFile.name,
-        size: sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`
+        size: sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`,
       });
     }
   };
@@ -107,15 +107,17 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
       const sizeKb = Math.round(selectedFile.size / 1024);
+      setResumeFile(selectedFile);
       setFile({
         name: selectedFile.name,
-        size: sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`
+        size: sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`,
       });
     }
   };
 
   const removeFile = () => {
     setFile(null);
+    setResumeFile(null);
   };
 
   // Add Public URL Source
@@ -136,10 +138,10 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
     alert('Draft submitted and written successfully to local cache.');
   };
 
-  // Run simulated analysis with loader increments
-  const handleAnalyze = () => {
-    if (!file) {
-      alert('Please provide a PDF, DOCX or TXT resume document to inspect.');
+  // Run backend analysis with loader increments
+  const handleAnalyze = async () => {
+    if (!file || !resumeFile) {
+      alert('Please provide a PDF or DOCX resume document to inspect.');
       return;
     }
     if (!jdText.trim()) {
@@ -147,35 +149,48 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
       return;
     }
 
+    const lower = resumeFile.name.toLowerCase();
+    if (!lower.endsWith('.pdf') && !lower.endsWith('.docx')) {
+      alert('Only PDF and DOCX files are supported by the analysis API.');
+      return;
+    }
+
+    setAnalyzeError('');
     setIsAnalyzing(true);
     setCurrentStepIndex(0);
 
-    // Increment analysis steps recursively on timers
+    const fullJd =
+      jdText.trim() +
+      (extraSource ? `\n\n${extraSource}` : '') +
+      (addedUrls.length ? `\n\n${addedUrls.join('\n')}` : '');
+
     const scheduleNextStep = (stepIdx: number) => {
       if (stepIdx < steps.length) {
         setTimeout(() => {
           setCurrentStepIndex(stepIdx);
           scheduleNextStep(stepIdx + 1);
-        }, 1200);
-      } else {
-        // All steps processed. Execute analysis synthesis
-        setTimeout(() => {
-          const result = simulateAnalysis(
-            candidateName,
-            targetRole,
-            roleCategory,
-            companyName,
-            file.name,
-            file.size,
-            jdText + ' ' + extraSource + ' ' + addedUrls.join(' ')
-          );
-          setIsAnalyzing(false);
-          onAnalysisComplete(result);
-        }, 1000);
+        }, 900);
       }
     };
 
     scheduleNextStep(1);
+
+    try {
+      const response = await analyzeResume(resumeFile, fullJd);
+      setCurrentStepIndex(steps.length);
+      const result = mapAnalyzeResponseToResult(response, {
+        candidateName,
+        targetRole,
+        roleCategory,
+        companyName,
+        jobDescription: fullJd,
+      });
+      setIsAnalyzing(false);
+      onAnalysisComplete(result);
+    } catch (err: any) {
+      setIsAnalyzing(false);
+      setAnalyzeError(err.message || 'Analysis failed. Ensure you are logged in and the API is running.');
+    }
   };
 
   return (
@@ -329,7 +344,7 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileChange}
-                  accept=".pdf,.docx,.txt"
+                  accept=".pdf,.docx"
                   className="hidden"
                 />
                 <div className="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center text-[#A3A3A3]">
@@ -340,7 +355,7 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
                     Drag and drop your file here, or click to browse
                   </p>
                   <p className="text-[10px] text-[#737373]">
-                    Accepted formats: PDF, DOCX, TXT. Max file size: 10MB
+                    Accepted formats: PDF, DOCX. Max file size: 10MB
                   </p>
                 </div>
               </div>
@@ -496,6 +511,12 @@ export default function AnalyzeResume({ onNavigate, onAnalysisComplete }: Analyz
               </div>
             </div>
           </div>
+
+          {analyzeError && (
+            <div className="p-3 bg-[#EF4444]/15 border border-[#EF4444]/30 rounded-lg text-xs text-[#EF4444]">
+              {analyzeError}
+            </div>
+          )}
 
           {/* Action buttons footer */}
           <div className="flex gap-4 pt-4">

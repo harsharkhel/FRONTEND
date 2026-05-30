@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { PageId } from '../types';
 import { Eye, EyeOff, Sparkles, Mail, Lock, User, ShieldAlert } from 'lucide-react';
 import { motion } from 'motion/react';
-import { googleSignIn, initAuth } from '../lib/firebaseAuth';
+import { completeGoogleRedirectIfNeeded, isFirebaseConfigured, loginWithGoogle } from '../lib/firebaseAuth';
+import { googleLogin, loginUser, registerUser, getToken, checkBackendHealth } from '../lib/api';
 
 interface LoginProps {
   onNavigate: (page: PageId) => void;
@@ -18,72 +19,105 @@ export default function Login({ onNavigate, onLoginSuccess }: LoginProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isAttemptingLogin, setIsAttemptingLogin] = useState(false);
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
-    initAuth(
-      (user) => {
-        localStorage.setItem('cvalign_session', JSON.stringify({ name: user.displayName || 'User', email: user.email }));
+    checkBackendHealth().then(setApiOnline);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get('error');
+    if (oauthError) {
+      setError(`Google sign-in failed (${oauthError}). Try email/password or check backend OAuth config.`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (getToken()) {
+      onLoginSuccess();
+      return;
+    }
+
+    if (!isFirebaseConfigured()) return;
+
+    completeGoogleRedirectIfNeeded()
+      .then(async (googleResult) => {
+        if (!googleResult) return;
+        await googleLogin(googleResult.idToken);
         onLoginSuccess();
-      },
-      () => {
-        // Not authenticated yet
-      }
-    );
+      })
+      .catch((err: Error) => {
+        if (err.message !== 'REDIRECTING') {
+          setError(err.message);
+        }
+      });
   }, [onLoginSuccess]);
 
   const handleGoogleLogin = async () => {
+    if (!isFirebaseConfigured()) {
+      setError('Firebase is not configured. Add VITE_FIREBASE_* variables to .env and restart the dev server.');
+      return;
+    }
+
     setIsAttemptingLogin(true);
     setError('');
     try {
-      const result = await googleSignIn();
-      if (result) {
-        localStorage.setItem(
-          'cvalign_session',
-          JSON.stringify({ name: result.user.displayName || 'User', email: result.user.email })
-        );
-        onLoginSuccess();
+      const googleResult = await loginWithGoogle();
+      await googleLogin(googleResult.idToken);
+      onLoginSuccess();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Google sign-in failed.';
+      if (message === 'REDIRECTING') {
+        setError('Redirecting to Google sign-in…');
+        return;
       }
-    } catch (err: any) {
-      setError(err.message || 'Google authentication encountered an error.');
+      setError(message);
     } finally {
       setIsAttemptingLogin(false);
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsAttemptingLogin(true);
 
-    if (isSignup) {
-      if (!name || !email || !password || !confirmPassword) {
-        setError('All administrative credentials are strictly required.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Confirmation match failed. Review your encryption password string.');
-        return;
-      }
-      if (password.length < 6) {
-        setError('Password string must measure at least 6 characters.');
-        return;
-      }
+    try {
+      if (isSignup) {
+        if (!name || !email || !password || !confirmPassword) {
+          setError('All administrative credentials are strictly required.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Confirmation match failed. Review your encryption password string.');
+          return;
+        }
+        if (password.length < 6) {
+          setError('Password string must measure at least 6 characters.');
+          return;
+        }
 
-      // Save to localStorage simulation
-      localStorage.setItem('cvalign_session', JSON.stringify({ name, email }));
-      onLoginSuccess();
-    } else {
-      if (!email || !password) {
-        setError('Please provide both administrative credentials.');
-        return;
-      }
-      if (!email.includes('@')) {
-        setError('A valid operational email is required.');
-        return;
-      }
+        const session = await registerUser(name, email, password);
+        onLoginSuccess();
+      } else {
+        if (!email || !password) {
+          setError('Please provide both administrative credentials.');
+          return;
+        }
+        if (!email.includes('@')) {
+          setError('A valid operational email is required.');
+          return;
+        }
 
-      // Save to localStorage simulation
-      localStorage.setItem('cvalign_session', JSON.stringify({ name: email.split('@')[0], email }));
-      onLoginSuccess();
+        await loginUser(email, password);
+        onLoginSuccess();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed. Check credentials and that the API is running.');
+    } finally {
+      setIsAttemptingLogin(false);
     }
   };
 
@@ -287,9 +321,16 @@ export default function Login({ onNavigate, onLoginSuccess }: LoginProps) {
 
               <button
                 type="submit"
-                className="w-full bg-white text-black text-[10px] md:text-[11px] uppercase tracking-[0.2em] font-bold py-4 rounded-lg hover:bg-neutral-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.1)] cursor-pointer mt-2"
+                disabled={isAttemptingLogin}
+                className={`w-full bg-white text-black text-[10px] md:text-[11px] uppercase tracking-[0.2em] font-bold py-4 rounded-lg hover:bg-neutral-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.1)] mt-2 ${
+                  isAttemptingLogin ? 'opacity-50 cursor-wait' : 'cursor-pointer'
+                }`}
               >
-                {isSignup ? 'Register Credentials' : 'Initialize Dashboard'}
+                {isAttemptingLogin
+                  ? 'Connecting...'
+                  : isSignup
+                    ? 'Register Credentials'
+                    : 'Initialize Dashboard'}
               </button>
 
               <div className="relative py-1 flex items-center justify-center">
@@ -311,7 +352,9 @@ export default function Login({ onNavigate, onLoginSuccess }: LoginProps) {
                   <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                   <path d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                 </svg>
-                <span className="text-[10px] uppercase tracking-widest font-semibold">{isAttemptingLogin ? 'Connecting...' : 'Google Account'}</span>
+                <span className="text-[10px] uppercase tracking-widest font-semibold">
+                  {isAttemptingLogin ? 'Connecting...' : 'Continue with Google'}
+                </span>
               </button>
             </form>
 
@@ -352,6 +395,20 @@ export default function Login({ onNavigate, onLoginSuccess }: LoginProps) {
       {/* Footer Micro-Metrics */}
       <footer className="relative z-10 px-6 md:px-12 py-8 border-t border-white/5 flex flex-col sm:flex-row gap-4 justify-between items-center max-w-7xl w-full mx-auto">
         <div className="flex gap-12">
+          <div className="flex flex-col gap-1 text-left">
+            <span className="text-[9px] uppercase tracking-widest text-white/30">API Backend</span>
+            <span
+              className={`text-[10px] font-mono ${
+                apiOnline === null
+                  ? 'text-white/40'
+                  : apiOnline
+                    ? 'text-[#22C55E]'
+                    : 'text-[#EF4444]'
+              }`}
+            >
+              {apiOnline === null ? 'CHECKING...' : apiOnline ? 'ONLINE :8000' : 'OFFLINE — run backend'}
+            </span>
+          </div>
           <div className="flex flex-col gap-1 text-left">
             <span className="text-[9px] uppercase tracking-widest text-white/30">Current Version</span>
             <span className="text-[10px] font-mono text-white/70">v2.4.0-STABLE</span>

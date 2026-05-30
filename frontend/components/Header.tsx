@@ -1,6 +1,7 @@
 import React from 'react';
-import { PageId, AnalysisResult } from '../types';
-import { Search, Bell, Menu, ShieldCheck, Sparkles, PlusCircle } from 'lucide-react';
+import { PageId } from '../types';
+import { Search, Bell, Menu, ShieldCheck, PlusCircle } from 'lucide-react';
+import { getSession } from '../lib/api';
 
 interface HeaderProps {
   onMenuToggle: () => void;
@@ -15,6 +16,10 @@ export default function Header({
   searchQuery,
   onSearchChange
 }: HeaderProps) {
+  const session = getSession();
+  const displayName = session?.name?.split(' ')[0] || 'User';
+  const avatarUrl = session?.profile_picture;
+
   return (
     <header className="sticky top-0 z-30 bg-[#050505]/80 backdrop-blur-md border-b border-white/10 px-6 py-4 flex items-center justify-between">
       {/* Mobile Menu Trigger & Search */}
@@ -63,19 +68,25 @@ export default function Header({
           {/* User Meta Information (Harsh) */}
           <div className="flex items-center gap-3">
             <div className="text-right hidden sm:block">
-              <span className="block text-xs font-semibold text-[#F5F5F5] leading-none">Harsh</span>
+              <span className="block text-xs font-semibold text-[#F5F5F5] leading-none">{displayName}</span>
               <span className="inline-flex items-center gap-1 text-[9px] text-[#94A3B8] uppercase font-sans tracking-wide mt-1.5 leading-none">
                 <ShieldCheck size={10} />
                 <span>AI Career Tool</span>
               </span>
             </div>
-            {/* Avatar using the precise source from the original markdown reference */}
             <div className="relative cursor-pointer group" onClick={() => onNavigate('profile')}>
-              <img
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_VA67UQ5sdRod8YL2ieLo7VGSg7p9VkA1N-HPRS2MqeF5RXrKxSgqDCm_PT3LZptIu2il2E-5iRNC9Bu18i_Rq9uV9m4BU7k3TWu4eK-JI7kVDo53x_xxZ9FlVYAb5uj6CwiitYe_6oOJ_LSBrjpV3ZiAhNExnDk1Nh0_IgmT5fk-k_PzMFecBlgTO2J8p-FNFezZwzijC8TV_03dUvrATBn7HET9ns0VzmPBTeFWPwehugEh50jOLZ_c55np0WyZfaWZcaID6dxv"
-                alt="user portrait"
-                className="w-8 h-8 rounded-full border border-white/20 object-cover grayscale transition-transform hover:scale-105"
-              />
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={displayName}
+                  className="w-8 h-8 rounded-full border border-white/20 object-cover transition-transform hover:scale-105"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full border border-white/20 bg-white/10 flex items-center justify-center text-[10px] font-bold text-white">
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+              )}
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-[#22C55E] border-2 border-[#050505] rounded-full" />
             </div>
           </div>

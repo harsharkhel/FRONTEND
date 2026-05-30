@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { PageId, AnalysisResult, MarketDataSource } from './types';
 import { getStoredRecords, saveStoredRecords, getStoredMarketSources, saveStoredMarketSources } from './data';
+import { clearAuth, fetchMe, getToken, loadHistoryAsRecords, setAuth } from './lib/api';
+import { logoutFirebase } from './lib/firebaseAuth';
 
 // Navigation Components
 import Sidebar from './components/Sidebar';
@@ -30,15 +32,32 @@ export default function App() {
 
   // Load state on mount
   useEffect(() => {
-    // Session state check
-    const session = localStorage.getItem('cvalign_session');
-    if (session) {
-      setCurrentPage('dashboard');
-    } else {
-      setCurrentPage('login');
+    if (window.location.pathname.endsWith('/auth/callback')) {
+      return;
     }
 
-    setRecords(getStoredRecords());
+    const session = localStorage.getItem('cvalign_session');
+    const token = getToken();
+
+    if (session && token) {
+      setCurrentPage('dashboard');
+      loadHistoryAsRecords()
+        .then((apiRecords) => {
+          if (apiRecords.length > 0) {
+            setRecords(apiRecords);
+            saveStoredRecords(apiRecords);
+          } else {
+            setRecords(getStoredRecords());
+          }
+        })
+        .catch(() => {
+          setRecords(getStoredRecords());
+        });
+    } else {
+      setCurrentPage('login');
+      setRecords(getStoredRecords());
+    }
+
     setSources(getStoredMarketSources());
   }, []);
 
@@ -68,18 +87,54 @@ export default function App() {
     saveStoredMarketSources([]);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('cvalign_session');
+  const handleLogout = async () => {
+    clearAuth();
+    try {
+      await logoutFirebase();
+    } catch {
+      // ignore Firebase sign-out errors
+    }
     setActiveAnalysisResult(null);
     setCurrentPage('login');
   };
 
   const handleLoginSuccess = () => {
     setCurrentPage('dashboard');
-    // Ensure data is synced upon login
-    setRecords(getStoredRecords());
+    loadHistoryAsRecords()
+      .then((apiRecords) => {
+        if (apiRecords.length > 0) {
+          setRecords(apiRecords);
+          saveStoredRecords(apiRecords);
+        } else {
+          setRecords(getStoredRecords());
+        }
+      })
+      .catch(() => {
+        setRecords(getStoredRecords());
+      });
     setSources(getStoredMarketSources());
   };
+
+  // Google OAuth redirect: /auth/callback?token=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthToken = params.get('token');
+    const onCallbackPath = window.location.pathname.endsWith('/auth/callback');
+
+    if (!onCallbackPath || !oauthToken) return;
+
+    setAuth(oauthToken, { name: 'User', email: '' });
+    fetchMe()
+      .then(() => {
+        window.history.replaceState({}, '', '/');
+        handleLoginSuccess();
+      })
+      .catch(() => {
+        clearAuth();
+        window.history.replaceState({}, '', '/');
+        setCurrentPage('login');
+      });
+  }, []);
 
   // Filter records in global query searches (for header)
   const filteredRecords = records.filter(rec => {

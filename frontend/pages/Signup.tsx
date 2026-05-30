@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { PageId } from '../types';
 import { ShieldAlert, Sparkles, User, Mail, Lock } from 'lucide-react';
 import { motion } from 'motion/react';
+import { registerUser } from '../lib/api';
 
 interface SignupProps {
   onNavigate: (page: PageId) => void;
@@ -14,8 +15,9 @@ export default function Signup({ onNavigate, onSignupSuccess }: SignupProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSignup = (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !email || !password || !confirmPassword) {
       setError('All administrative credentials are strictly required.');
@@ -30,9 +32,17 @@ export default function Signup({ onNavigate, onSignupSuccess }: SignupProps) {
       return;
     }
     setError('');
-    // Store user simulation
-    localStorage.setItem('cvalign_session', JSON.stringify({ name, email }));
-    onSignupSuccess();
+    setIsSubmitting(true);
+    try {
+      const session = await registerUser(name, email, password);
+      localStorage.setItem('cvalign_session', JSON.stringify({ name: session.name, email: session.email }));
+      onSignupSuccess();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Registration failed. Is the API running?';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -179,9 +189,12 @@ export default function Signup({ onNavigate, onSignupSuccess }: SignupProps) {
 
               <button
                 type="submit"
-                className="w-full bg-white text-black text-[10px] md:text-[11px] uppercase tracking-[0.2em] font-bold py-3.5 rounded-lg hover:bg-neutral-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.1)] cursor-pointer mt-2"
+                disabled={isSubmitting}
+                className={`w-full bg-white text-black text-[10px] md:text-[11px] uppercase tracking-[0.2em] font-bold py-3.5 rounded-lg hover:bg-neutral-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.1)] mt-2 ${
+                  isSubmitting ? 'opacity-50 cursor-wait' : 'cursor-pointer'
+                }`}
               >
-                Register Credentials
+                {isSubmitting ? 'Connecting...' : 'Register Credentials'}
               </button>
 
               <div className="relative py-2 flex items-center justify-center">
@@ -193,13 +206,7 @@ export default function Signup({ onNavigate, onSignupSuccess }: SignupProps) {
 
               <button
                 type="button"
-                onClick={() => {
-                  localStorage.setItem(
-                    'cvalign_session',
-                    JSON.stringify({ name: 'Harsh Arkhel', email: 'harsharkhel123@gmail.com' })
-                  );
-                  onSignupSuccess();
-                }}
+                onClick={() => onNavigate('login')}
                 className="w-full border border-white/10 rounded-lg py-2.5 flex items-center justify-center gap-3 hover:bg-white/[0.05] transition-all cursor-pointer text-white"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
